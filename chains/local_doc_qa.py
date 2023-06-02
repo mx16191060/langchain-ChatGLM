@@ -4,8 +4,8 @@ from langchain.document_loaders import UnstructuredFileLoader, TextLoader
 from configs.model_config import *
 import datetime
 from textsplitter import ChineseTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from typing import List, Tuple, Dict
-from models.chatgpt_api import gpt
 from langchain.docstore.document import Document
 import numpy as np
 from utils import torch_gc
@@ -21,6 +21,8 @@ from models.loader import LoaderCheckPoint
 import models.shared as shared
 from agent import bing_search
 from langchain.docstore.document import Document
+import re
+import json
 
 
 def load_file(filepath, sentence_size=SENTENCE_SIZE):
@@ -30,6 +32,10 @@ def load_file(filepath, sentence_size=SENTENCE_SIZE):
     elif filepath.lower().endswith(".txt"):
         loader = TextLoader(filepath, autodetect_encoding=True)
         textsplitter = ChineseTextSplitter(pdf=False, sentence_size=sentence_size)
+        # textsplitter = RecursiveCharacterTextSplitter(
+        # chunk_size=500,
+        # chunk_overlap=0
+        # )
         docs = loader.load_and_split(textsplitter)
     elif filepath.lower().endswith(".pdf"):
         loader = UnstructuredPaddlePDFLoader(filepath)
@@ -66,6 +72,8 @@ def generate_prompt(related_docs: List[str],
                     prompt_template: str = PROMPT_TEMPLATE, ) -> str:
     context = "\n".join([doc.page_content for doc in related_docs])
     prompt = prompt_template.replace("{question}", query).replace("{context}", context)
+    logger.info(prompt)
+
     return prompt
 
 
@@ -85,11 +93,14 @@ def seperate_list(ls: List[int]) -> List[List[int]]:
 def similarity_search_with_score_by_vector(
         self, embedding: List[float], k: int = 4
 ) -> List[Tuple[Document, float]]:
-    scores, indices = self.index.search(np.array([embedding], dtype=np.float32), k)
+    scores, indices = self.index.search(np.array([embedding], dtype=np.float32), 2)
+    print("scores:", scores)
+    print("indices:", indices)
     docs = []
     id_set = set()
     store_len = len(self.index_to_docstore_id)
-    for j, i in enumerate(indices[0]):
+    print("store_len:", store_len)
+    for j, i in enumerate(indices[0]):  # i 是索引位置
         if i == -1 or 0 < self.score_threshold < scores[0][j]:
             # This happens when not enough docs are returned.
             continue
@@ -151,12 +162,21 @@ def search_result2docs(search_results):
     return docs
 
 
+import re
+
+
+def wenda_split(text, pattern):
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1)
+
+
 class LocalDocQA:
     llm: BaseAnswer = None
     embeddings: object = None
     top_k: int = VECTOR_SEARCH_TOP_K
     chunk_size: int = CHUNK_SIZE
-    chunk_conent: bool = True
+    chunk_conent: bool = CHUNK_CONENT
     score_threshold: int = VECTOR_SEARCH_SCORE_THRESHOLD
 
     def init_cfg(self,
@@ -169,6 +189,15 @@ class LocalDocQA:
         self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_dict[embedding_model],
                                                 model_kwargs={'device': embedding_device})
         self.top_k = top_k
+        self.fulldoc = {}
+        with open("content/kefu/kefu_langchain.txt") as f:
+            while True:
+                _str = f.readline()
+                if not _str:
+                    break
+                key = wenda_split(_str, r"问: (.*)答:")
+                value = wenda_split(_str, r"答: (.*)#0525#")
+                self.fulldoc[key] = value
 
     def init_knowledge_vector_store(self,
                                     filepath: str or List[str],
@@ -256,51 +285,83 @@ class LocalDocQA:
             logger.error(e)
             return None, [one_title]
 
-    def get_knowledge_based_answer(self, query, vs_path, chat_history=[], streaming: bool = STREAMING):
+    def get_knowledge_based_answer(self, query, vs_path, chat_history=[], streaming: bool = STREAMING, tokenizer=None):
+        with open("new_config.txt") as f:
+            _d = json.loads(f.read(), strict=False)
+            self.yuzhi_big = _d["yuzhi_big"]
+            self.yuzhi_small = _d["yuzhi_small"]
+            self.yuzhi_gap = _d["yuzhi_gap"]
+            self.yuzhi_min = _d["yuzhi_min"]
+            self.template = _d["p"]
+        f.close()
         vector_store = FAISS.load_local(vs_path, self.embeddings)
-        FAISS.similarity_search_with_score_by_vector = similarity_search_with_score_by_vector
+        print("**********************\n")
+        # FAISS.similarity_search_with_score_by_vector = similarity_search_with_score_by_vector
+        vector_search_top_k = 1
+        score_threshold = 0
+        print(self.chunk_conent)
         vector_store.chunk_size = self.chunk_size
         vector_store.chunk_conent = self.chunk_conent
         vector_store.score_threshold = self.score_threshold
-        related_docs_with_score = vector_store.similarity_search_with_score(query, k=self.top_k)
+        related_docs_with_score = vector_store.similarity_search_with_score(query, k=3)
+        print(related_docs_with_score)
+        print("------------------------------\n")
         torch_gc()
-        prompt = generate_prompt(related_docs_with_score, query)
+        li = []
+        pre = 0
+        query_tokens = tokenizer.tokenize(query)
+        t_min = self.yuzhi_small
+        t_max = self.yuzhi_big
+        for tup in related_docs_with_score:
+            _str = tup[0].page_content
+            _str = _str.replace("\n", "")
+            std_tokens = tokenizer.tokenize(_str)
+            print(query_tokens)
+            print(std_tokens)
+            token_counts = 0
+            for token_q in query_tokens:
+                if len(token_q) < 3:
+                    continue
+                if token_q in std_tokens:
+                    token_counts += len(token_q)
+            theshold = t_min + (t_max - t_min) * token_counts / len(query_tokens)
+            print("命中%s个字，占比%s, 阈值%s" % (token_counts, token_counts / len(query), theshold))
+            if pre == 0:
+                pre = tup[1]
 
-        for answer_result in self.llm.generatorAnswer(prompt=prompt, history=chat_history,
+            if tup[1] > theshold:
+                break
+            elif tup[1] - pre > self.yuzhi_gap:
+                break
+            else:
+                pre = tup[1]
+            if self.fulldoc.get(_str):
+                tup[0].page_content += self.fulldoc[_str]
+                tup[0].page_content = "问: %s\n答: %s" % (_str, self.fulldoc[_str])
+                li.append(tup)
+            if tup[1] < self.yuzhi_min:
+                break
+
+        related_docs_with_score = [_[0] for _ in li]
+        # 如果是以中文、英文或数字结尾，加个问号
+        if re.search(r'[\u4e00-\u9fa5]', query[-1]) or re.search(r'[a-zA-Z]', query[-1]) or re.search(r'[0-9]',
+                                                                                                      query[-1]):
+            query += '?'
+        prompt = generate_prompt(related_docs_with_score, query, self.template)
+        chat_history.append([])
+        for answer_result in self.llm.generatorAnswer(prompt=prompt, history=[],
                                                       streaming=streaming):
             resp = answer_result.llm_output["answer"]
-            history = answer_result.history
-            history[-1][0] = query
+            # history = answer_result.history
+            history = ["", ""]
+            history[0] = query
+            history[1] = resp
+            print(resp)
+            chat_history[-1] = history
             response = {"query": query,
                         "result": resp,
                         "source_documents": related_docs_with_score}
-            yield response, history
-
-    def get_knowledge_based_answer_gpt(self, query, vs_path, chat_history=[], streaming: bool = STREAMING):
-        vector_store = FAISS.load_local(vs_path, self.embeddings)
-        FAISS.similarity_search_with_score_by_vector = similarity_search_with_score_by_vector
-        vector_store.chunk_size = self.chunk_size
-        vector_store.chunk_conent = self.chunk_conent
-        vector_store.score_threshold = self.score_threshold
-        related_docs_with_score = vector_store.similarity_search_with_score(query, k=self.top_k)
-        torch_gc()
-        prompt = generate_prompt(related_docs_with_score, query)
-        resp = gpt(prompt)
-        chat_history.append([query, resp])
-        response = {"query": query,
-                    "result": resp,
-                    "source_documents": related_docs_with_score}
-        yield response, chat_history
-
-        # for answer_result in self.llm.generatorAnswer(prompt=prompt, history=chat_history,
-        #                                               streaming=streaming):
-        #     resp = answer_result.llm_output["answer"]
-        #     history = answer_result.history
-        #     history[-1][0] = query
-        #     response = {"query": query,
-        #                 "result": resp,
-        #                 "source_documents": related_docs_with_score}
-        #     yield response, history
+            yield response, chat_history
 
     # query      查询内容
     # vs_path    知识库路径
@@ -312,12 +373,20 @@ class LocalDocQA:
                                         score_threshold=VECTOR_SEARCH_SCORE_THRESHOLD,
                                         vector_search_top_k=VECTOR_SEARCH_TOP_K, chunk_size=CHUNK_SIZE):
         vector_store = FAISS.load_local(vs_path, self.embeddings)
+        chunk_conent = False
+        print("**********************\n")
+        vector_search_top_k = 1
+        score_threshold = 0
         FAISS.similarity_search_with_score_by_vector = similarity_search_with_score_by_vector
         vector_store.chunk_conent = chunk_conent
         vector_store.score_threshold = score_threshold
         vector_store.chunk_size = chunk_size
         related_docs_with_score = vector_store.similarity_search_with_score(query, k=vector_search_top_k)
+        print("***\n")
+        print(related_docs_with_score)
+        print("***\n")
         if not related_docs_with_score:
+            print("没找到***\n")
             response = {"query": query,
                         "source_documents": []}
             return response, ""
@@ -330,7 +399,7 @@ class LocalDocQA:
     def get_search_result_based_answer(self, query, chat_history=[], streaming: bool = STREAMING):
         results = bing_search(query)
         result_docs = search_result2docs(results)
-        prompt = generate_prompt(result_docs, query)
+        prompt = generate_prompt(result_docs, query, self.template)
 
         for answer_result in self.llm.generatorAnswer(prompt=prompt, history=chat_history,
                                                       streaming=streaming):
@@ -367,8 +436,8 @@ if __name__ == "__main__":
                                                                      streaming=True):
         print(resp["result"][last_print_len:], end="", flush=True)
         last_print_len = len(resp["result"])
-    source_text = [f"""出处 [{inum + 1}] {doc.metadata['source'] if doc.metadata['source'].startswith("http") 
-                   else os.path.split(doc.metadata['source'])[-1]}：\n\n{doc.page_content}\n\n"""
+    source_text = [f"""出处 [{inum + 1}] {doc.metadata['source'] if doc.metadata['source'].startswith("http")
+    else os.path.split(doc.metadata['source'])[-1]}：\n\n{doc.page_content}\n\n"""
                    # f"""相关度：{doc.metadata['score']}\n\n"""
                    for inum, doc in
                    enumerate(resp["source_documents"])]

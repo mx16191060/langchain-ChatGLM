@@ -27,7 +27,7 @@ def get_vs_list():
     return lst_default + lst
 
 
-vs_list = get_vs_list()
+vs_list_org = get_vs_list()
 
 embedding_model_dict_list = list(embedding_model_dict.keys())
 
@@ -55,7 +55,7 @@ def get_answer(query, vs_path, history, mode, score_threshold=VECTOR_SEARCH_SCOR
             yield history, ""
     elif mode == "知识库问答" and vs_path is not None and os.path.exists(vs_path):
         for resp, history in local_doc_qa.get_knowledge_based_answer(
-                query=query, vs_path=vs_path, chat_history=history, streaming=streaming):
+                query=query, vs_path=vs_path, chat_history=history, streaming=streaming, tokenizer=tokenizer):
             source = "\n\n"
             source += "".join(
                 [f"""<details> <summary>出处 [{i + 1}] {os.path.split(doc.metadata["source"])[-1]}</summary>\n"""
@@ -207,17 +207,28 @@ def change_chunk_conent(mode, label_conent, history):
     else:
         return gr.update(visible=False), history + [[None, f"【已关闭{conent}】"]]
 
+def flush(chatbot):
+    chatbot = chatbot + [[None, "已刷新知识库"]]
+    return gr.update(visible=True, choices=vs_list.value), chatbot
 
-def add_vs_name(vs_name, vs_list, chatbot):
-    if vs_name in vs_list:
+def add_vs_name(vs_name, chatbot):
+    if vs_name in vs_list.value:
+        lst_default = ["新建知识库"]
+        print("add_vs_name", vs_list.value, type(vs_list))
         vs_status = "与已有知识库名称冲突，请重新选择其他名称后提交"
         chatbot = chatbot + [[None, vs_status]]
-        return gr.update(visible=True), vs_list, gr.update(visible=True), gr.update(visible=True), gr.update(
+        return gr.update(visible=True, choices=vs_list.value), vs_list.value, gr.update(visible=True), gr.update(visible=True), gr.update(
             visible=False), chatbot
     else:
         vs_status = f"""已新增知识库"{vs_name}",将在上传文件并载入成功后进行存储。请在开始对话前，先完成文件上传。 """
         chatbot = chatbot + [[None, vs_status]]
-        return gr.update(visible=True, choices=[vs_name] + vs_list, value=vs_name), [vs_name] + vs_list, gr.update(
+        vs_list.value.append(vs_name)
+        vs_list.value.remove("新建知识库")
+        lst_default = ["新建知识库"]
+        vs_list.value.sort()
+        vs_list.value = lst_default + vs_list.value
+        print("add_vs_name", vs_list.value, type(vs_list))
+        return gr.update(visible=True, choices=vs_list.value, value=vs_name), vs_list.value, gr.update(
             visible=False), gr.update(visible=False), gr.update(visible=True), chatbot
 
 
@@ -234,7 +245,7 @@ webui_title = """
 # 🎉langchain-ChatGLM WebUI🎉
 👍 [https://github.com/imClumsyPanda/langchain-ChatGLM](https://github.com/imClumsyPanda/langchain-ChatGLM)
 """
-default_vs = vs_list[0] if len(vs_list) > 1 else "为空"
+default_vs = vs_list_org[0] if len(vs_list_org) > 1 else "为空"
 init_message = f"""欢迎使用 langchain-ChatGLM Web UI！
 
 请在右侧切换模式，目前支持直接与 LLM 模型对话或基于本地知识库问答。
@@ -250,6 +261,17 @@ args = parser.parse_args()
 
 args_dict = vars(args)
 shared.loaderCheckPoint = LoaderCheckPoint(args_dict)
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained('/home/user/imported_models/chatglm-6b-20230419', trust_remote_code=True)
+token_li = []
+with open("tokens.txt") as f_token:
+    while True:
+        _str = f_token.readline().replace("\n", "")
+        if not _str:
+            break
+        token_li.append(_str)
+f_token.close()
+tokenizer.add_tokens(token_li, special_tokens=True)
 llm_model_ins = shared.loaderLLM()
 llm_model_ins.set_history_len(LLM_HISTORY_LEN)
 
@@ -263,8 +285,8 @@ default_theme_args = dict(
 
 with gr.Blocks(css=block_css, theme=gr.themes.Default(**default_theme_args)) as demo:
     vs_path, file_status, model_status, vs_list = gr.State(
-        os.path.join(VS_ROOT_PATH, vs_list[0]) if len(vs_list) > 1 else ""), gr.State(""), gr.State(
-        model_status), gr.State(vs_list)
+        os.path.join(VS_ROOT_PATH, vs_list_org[0]) if len(vs_list_org) > 1 else ""), gr.State(""), gr.State(
+        model_status), gr.State(vs_list_org)
 
     gr.Markdown(webui_title)
     with gr.Tab("对话"):
@@ -285,11 +307,12 @@ with gr.Blocks(css=block_css, theme=gr.themes.Default(**default_theme_args)) as 
                             inputs=[mode, chatbot],
                             outputs=[vs_setting, knowledge_set, chatbot])
                 with vs_setting:
-                    select_vs = gr.Dropdown(vs_list.value,
+                    select_vs = gr.Dropdown(vs_list_org,
                                             label="请选择要加载的知识库",
                                             interactive=True,
                                             value=vs_list.value[0] if len(vs_list.value) > 0 else None
                                             )
+                    b2 = gr.Button("更新知识库")
                     vs_name = gr.Textbox(label="请输入新建知识库名称，当前知识库命名暂不支持中文",
                                          lines=1,
                                          interactive=True,
@@ -315,11 +338,14 @@ with gr.Blocks(css=block_css, theme=gr.themes.Default(**default_theme_args)) as 
                                                    show_label=False)
                             load_folder_button = gr.Button("上传文件夹并加载知识库")
                     vs_add.click(fn=add_vs_name,
-                                 inputs=[vs_name, vs_list, chatbot],
+                                 inputs=[vs_name, chatbot],
                                  outputs=[select_vs, vs_list, vs_name, vs_add, file2vs, chatbot])
                     select_vs.change(fn=change_vs_name_input,
                                      inputs=[select_vs, chatbot],
                                      outputs=[vs_name, vs_add, file2vs, vs_path, chatbot])
+                    b2.click(fn=flush,
+                            inputs=[chatbot],
+                            outputs= [select_vs, chatbot])
                     load_file_button.click(get_vector_store,
                                            show_progress=True,
                                            inputs=[select_vs, files, sentence_size, chatbot, vs_add, vs_add],
@@ -405,7 +431,7 @@ with gr.Blocks(css=block_css, theme=gr.themes.Default(**default_theme_args)) as 
                             load_conent_button = gr.Button("添加内容并加载知识库")
                     # 将上传的文件保存到content文件夹下,并更新下拉框
                     vs_add.click(fn=add_vs_name,
-                                 inputs=[vs_name, vs_list, chatbot],
+                                 inputs=[vs_name, chatbot],
                                  outputs=[select_vs, vs_list, vs_name, vs_add, file2vs, chatbot])
                     select_vs.change(fn=change_vs_name_input,
                                      inputs=[select_vs, chatbot],
@@ -463,7 +489,7 @@ with gr.Blocks(css=block_css, theme=gr.themes.Default(**default_theme_args)) as 
 (demo
  .queue(concurrency_count=3)
  .launch(server_name='0.0.0.0',
-         server_port=7860,
+         server_port=27777,
          show_api=False,
          share=False,
          inbrowser=False))

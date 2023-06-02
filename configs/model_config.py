@@ -17,7 +17,7 @@ embedding_model_dict = {
 }
 
 # Embedding model name
-EMBEDDING_MODEL = "text2vec"
+EMBEDDING_MODEL = "text2vec-base"
 
 # Embedding running device
 EMBEDDING_DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -46,8 +46,8 @@ llm_model_dict = {
     },
     "chatglm-6b": {
         "name": "chatglm-6b",
-        "pretrained_model_name": "THUDM/chatglm-6b",
-        "local_model_path": None,
+        "pretrained_model_name": "/home/user/imported_models/chatglm-6b-20230419",
+        "local_model_path": "/home/user/imported_models/chatglm-6b-20230419",
         "provides": "ChatGLM"
     },
 
@@ -65,18 +65,8 @@ llm_model_dict = {
     }
 }
 
-# LLM 名称
+# LLM model name
 LLM_MODEL = "chatglm-6b"
-# 如果你需要加载本地的model，指定这个参数  ` --no-remote-model`，或者下方参数修改为 `True`
-NO_REMOTE_MODEL = False
-# 量化加载8bit 模型
-LOAD_IN_8BIT = False
-# Load the model with bfloat16 precision. Requires NVIDIA Ampere GPU.
-BF16 = False
-# 本地模型存放的位置
-MODEL_DIR = "model/"
-# 本地lora存放的位置
-LORA_DIR = "loras/"
 
 # LLM lora path，默认为空，如果有请直接指定文件夹路径
 LLM_LORA_PATH = ""
@@ -97,25 +87,31 @@ VS_ROOT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "vector_
 UPLOAD_ROOT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content")
 
 # 基于上下文的prompt模版，请务必保留"{question}"和"{context}"
-PROMPT_TEMPLATE = """已知信息：
-{context} 
+PROMPT_TEMPLATE = """
+{context}
+如果无法根据以上文段中无法得知“{question}”，停止思考，直接回复“无法从已知信息中得到答案”。如果“{question}”是一句陈述句，请在以上内容中总结“{question}”。如果“{question}”是一个疑问句，请根据以上内容回答“{question}”
+"""
 
-根据上述已知信息回答用户的问题。如果无法从中得到答案，请说 “根据已知信息无法回答该问题” 或 “没有提供足够的相关信息”，不允许在答案中添加编造成分，答案请使用中文。 问题是：{question}"""
+# {context}
+# 用户1: {question}（如果问过，就根据以前的答案作总结，如果没问过，就回答不知道）
+# 客服:
 
 # 文本分句长度
-SENTENCE_SIZE = 100
+SENTENCE_SIZE = 300
 
 # 匹配后单段上下文长度
-CHUNK_SIZE = 250
+CHUNK_SIZE = 1200
+
+CHUNK_CONENT = True
 
 # LLM input history length
-LLM_HISTORY_LEN = 3
+LLM_HISTORY_LEN = 0  #3
 
 # return top-k text chunk from vector store
-VECTOR_SEARCH_TOP_K = 5
+VECTOR_SEARCH_TOP_K = 3
 
 # 知识检索内容相关度 Score, 数值范围约为0-1100，如果为0，则不生效，经测试设置为小于500时，匹配结果更精准
-VECTOR_SEARCH_SCORE_THRESHOLD = 0
+VECTOR_SEARCH_SCORE_THRESHOLD = 350
 
 NLTK_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nltk_data")
 

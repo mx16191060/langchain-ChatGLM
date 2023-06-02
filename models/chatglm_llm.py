@@ -16,7 +16,7 @@ import transformers
 class ChatGLM(BaseAnswer, LLM, ABC):
     max_token: int = 10000
     temperature: float = 0.01
-    top_p = 0.9
+    top_p = 0.95
     checkPoint: LoaderCheckPoint = None
     # history = []
     history_len: int = 10

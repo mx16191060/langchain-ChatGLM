@@ -349,16 +349,19 @@ class LoaderCheckPoint:
         self.model_path = model_path
 
     def reload_model(self):
+        print("reload model")
         self.unload_model()
         self.model_config = self._load_model_config(self.model_name)
 
         if self.use_ptuning_v2:
             try:
                 prefix_encoder_file = open(Path(f'{self.ptuning_dir}/config.json'), 'r')
+                print(prefix_encoder_file)
                 prefix_encoder_config = json.loads(prefix_encoder_file.read())
                 prefix_encoder_file.close()
                 self.model_config.pre_seq_len = prefix_encoder_config['pre_seq_len']
                 self.model_config.prefix_projection = prefix_encoder_config['prefix_projection']
+                print("加载ptuning模型")
             except Exception as e:
                 print("加载PrefixEncoder config.json失败")
 
@@ -376,6 +379,7 @@ class LoaderCheckPoint:
                         new_prefix_state_dict[k[len("transformer.prefix_encoder."):]] = v
                 self.model.transformer.prefix_encoder.load_state_dict(new_prefix_state_dict)
                 self.model.transformer.prefix_encoder.float()
+                print("加载ptuning模型")
             except Exception as e:
                 print("加载PrefixEncoder模型参数失败")
 
