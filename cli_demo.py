@@ -16,11 +16,11 @@ def main():
     args = parser.parse_args()
     args_dict = vars(args)
     shared.loaderCheckPoint = LoaderCheckPoint(args_dict)
-    llm_model_ins = shared.loaderLLM()
-    llm_model_ins.history_len = LLM_HISTORY_LEN
+    # llm_model_ins = shared.loaderLLM()
+    # llm_model_ins.history_len = LLM_HISTORY_LEN
 
     local_doc_qa = LocalDocQA()
-    local_doc_qa.init_cfg(llm_model=llm_model_ins,
+    local_doc_qa.init_cfg(
                           embedding_model=EMBEDDING_MODEL,
                           embedding_device=EMBEDDING_DEVICE,
                           top_k=VECTOR_SEARCH_TOP_K)
@@ -35,7 +35,7 @@ def main():
     while True:
         query = input("Input your question 请输入问题：")
         last_print_len = 0
-        for resp, history in local_doc_qa.get_knowledge_based_answer(query=query,
+        for resp, history in local_doc_qa.get_knowledge_based_answer_gpt(query=query,
                                                                      vs_path=vs_path,
                                                                      chat_history=history,
                                                                      streaming=STREAMING):

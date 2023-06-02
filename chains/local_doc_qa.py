@@ -5,6 +5,7 @@ from configs.model_config import *
 import datetime
 from textsplitter import ChineseTextSplitter
 from typing import List, Tuple, Dict
+from models.chatgpt_api import gpt
 from langchain.docstore.document import Document
 import numpy as np
 from utils import torch_gc
@@ -274,6 +275,32 @@ class LocalDocQA:
                         "result": resp,
                         "source_documents": related_docs_with_score}
             yield response, history
+
+    def get_knowledge_based_answer_gpt(self, query, vs_path, chat_history=[], streaming: bool = STREAMING):
+        vector_store = FAISS.load_local(vs_path, self.embeddings)
+        FAISS.similarity_search_with_score_by_vector = similarity_search_with_score_by_vector
+        vector_store.chunk_size = self.chunk_size
+        vector_store.chunk_conent = self.chunk_conent
+        vector_store.score_threshold = self.score_threshold
+        related_docs_with_score = vector_store.similarity_search_with_score(query, k=self.top_k)
+        torch_gc()
+        prompt = generate_prompt(related_docs_with_score, query)
+        resp = gpt(prompt)
+        chat_history.append([query, resp])
+        response = {"query": query,
+                    "result": resp,
+                    "source_documents": related_docs_with_score}
+        yield response, chat_history
+
+        # for answer_result in self.llm.generatorAnswer(prompt=prompt, history=chat_history,
+        #                                               streaming=streaming):
+        #     resp = answer_result.llm_output["answer"]
+        #     history = answer_result.history
+        #     history[-1][0] = query
+        #     response = {"query": query,
+        #                 "result": resp,
+        #                 "source_documents": related_docs_with_score}
+        #     yield response, history
 
     # query      查询内容
     # vs_path    知识库路径
